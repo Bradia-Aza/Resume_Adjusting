@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 cache/
 .ipynb_checkpoints/
+.Ds_Store/
+Rsm/
