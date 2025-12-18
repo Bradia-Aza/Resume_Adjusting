@@ -1,0 +1,29 @@
+About the Role: We are seeking a skilled, detail-oriented, and passionate Machine Learning Engineer to join our enterprise team. In this pivotal role, you will be at the forefront of developing and deploying groundbreaking AI solutions. This involves integrating advanced language/voice/vision models, mastering fine-tuning techniques, building sophisticated workflows and platforms, and pioneering innovative agentic approaches. You will immerse yourself in challenging problems that demand a deep understanding of model behavior, meticulous implementation, and an unwavering commitment to quality and reliability in enterprise environments. A key and exciting aspect of this role is contributing to the architecture and implementation of intelligent systems where AI agents can perform complex tasks autonomously, interacting with diverse data sources and tools, as we collectively move towards building truly cohesive and powerful AI capabilities for our clients.
+
+Responsibilities
+
+	•	Deliver solutions end to end that meet the needs of our customers - understanding user pain points, scoping product specs, and designing and building LLM-powered software
+	•	Benchmark the model, and help write evals for customers to identify model weaknesses
+	•	Develop and deploy modern search systems (e.g., RAG, DeepSearch) to enhance model performance, grounding, and the ability to utilize enterprise-specific knowledge
+	•	Implement and optimize techniques for fine-tuning and align large models on domain-specific data
+	•	Ensure the quality, reliability, security, and scalability of models and agentic systems through meticulous attention to detail, diligent execution, and continuous monitoring in demanding enterprise settings
+	•	Integrate individual AI components into a scalable platform   
+Qualifications
+
+	•	Bachelor's or Master's degree in Computer Science, Machine Learning, Artificial Intelligence, or a related quantitative field, or equivalent practical experience
+	•	Strong contribution record on GitHub. Please include your GitHub link in your application
+	•	Experience working with large language or multimodal models and their applications
+	•	Experience implementing and working with search systems
+	•	Proven ability to pay close attention to detail and prioritize quality, reliability, and security in technical work
+	•	Proficiency in programming languages (e.g., Python, Rust, TypeScript or Go) and relevant ML frameworks (e.g., PyTorch, JAX)
+	•	Demonstrated ability to design, chain, or orchestrate multiple models (especially LLMs) to create multi-step pipelines or workflows for task automation   
+Bonus Points
+
+	•	Experience developing or contributing to agentic AI products or systems
+	•	Experience with cloud platforms (AWS, GCP, Azure) and MLOps practices
+	•	Familiarity with distributed training and inference techniques
+	•	Experience with system design, API development, and building scalable infrastructure for deploying and managing AI models or agentic systems
+	•	Understanding of enterprise software integration patterns and data security considerations
+	•	Solid understanding of HTTP protocol and real-time communication protocols (e.g., WebRTC) for voice AI. 
+	•	Excellent problem solving skills
+	•	Ability to work independently and drive projects forward in a fast-paced environment

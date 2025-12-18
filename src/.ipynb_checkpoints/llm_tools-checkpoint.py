@@ -6,6 +6,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
+
+
 # --- Schema 1: For files where we ALREADY know the section ---
 class TitleOnly(BaseModel):
     title: str = Field(
@@ -48,7 +50,7 @@ def enrich_file_metadata(file_list: List[dict], gemini_api_key: str = None) -> L
         ValueError: If the Gemini API key cannot be found.
     """
     
-    # 1. API Key Setup
+    # API Key Setup
     if not gemini_api_key: 
         # Loads variables from .env file
         load_dotenv()
@@ -56,15 +58,14 @@ def enrich_file_metadata(file_list: List[dict], gemini_api_key: str = None) -> L
         if not gemini_api_key:
             raise ValueError("GEMINI API KEY not found")
             
-    # 2. Initialize Model
-    # Note: 'gemini-2.5-flash' is the standard lightweight model name. 
+    # Initialize Model
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         temperature=0,
         api_key=gemini_api_key
     )
     
-    # 3. Create TWO distinct chains for different output schemas
+    # Create TWO distinct chains for different output schemas
     
     # Chain A: For known sections (extracts Title only)
     structured_llm_title = llm.with_structured_output(TitleOnly)
@@ -139,3 +140,119 @@ def enrich_file_metadata(file_list: List[dict], gemini_api_key: str = None) -> L
             enriched_list.append(entry)
 
     return enriched_list
+
+##################################################################################
+
+# --- 1. Revert to Simple Schema (The Judge's Final Output) ---
+class JDExtraction(BaseModel):
+    """Final, filtered list of keywords approved by the Judge."""
+    technical_stack: List[str] = Field(..., description="Approved list of core tech stack.")
+    tools_and_platforms: List[str] = Field(..., description="Approved list of tools/platforms.")
+    domain_knowledge: List[str] = Field(..., description="Approved list of domain concepts.")
+    soft_skills: List[str] = Field(..., description="Approved list of critical behavioral traits.")
+    years_experience_min: int = Field(..., description="Validated minimum years of experience.")
+
+# --- 2. Intermediate Schema (For the Miner - Raw List) ---
+class RawExtraction(BaseModel):
+    """Raw, unfiltered extraction from the first pass."""
+    raw_keywords: List[str] = Field(..., description="A comprehensive list of ALL potential keywords found in the text.")
+    raw_years: int = Field(..., description="Years of experience found.")
+
+def extract_jd_features(jd_file_path: str, gemini_api_key: str = None) -> JDExtraction:
+    
+    if not gemini_api_key: 
+        load_dotenv()
+        gemini_api_key = os.getenv("GOOGLE_API_KEY")
+
+    if not os.path.exists(jd_file_path):
+        raise FileNotFoundError(f"File not found: {jd_file_path}")
+        
+    try:
+        with open(jd_file_path, 'r', encoding='utf-8') as f:
+            jd_text = f.read()
+    except Exception as e:
+        raise IOError(f"Error reading file: {e}")
+
+    # Use a stronger model for the Judge if possible, but Flash is fine for both.
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0, api_key=gemini_api_key)
+
+    # ==========================================
+    # STEP 1: THE MINER (High Recall)
+    # ==========================================
+    # We ask for a simple raw list first to ensure we don't miss anything.
+    miner_llm = llm.with_structured_output(RawExtraction)
+    
+    miner_prompt = ChatPromptTemplate.from_messages([
+        ("system", 
+         """You are a Job Description Scanner. Your job is to extract EVERY potential technical keyword, tool, soft skill, and concept mentioned in the text.
+         
+         RULES:
+         1. Be aggressive. If it looks like a skill, extract it.
+         2. Do not filter yet. We will filter later.
+         3. Extract exact phrases from the text.
+         """
+        ),
+        ("human", "Job Description:\n{jd_content}")
+    ])
+    
+    miner_chain = miner_prompt | miner_llm
+
+    print("Step 1: Mining keywords (High Recall)...")
+    try:
+        # Context management
+        content_for_mining = jd_text[:12000]
+        raw_data = miner_chain.invoke({"jd_content": content_for_mining})
+        print(f"Minerd found {len(raw_data.raw_keywords)} potential keywords.")
+    except Exception as e:
+        print(f"Mining Error: {e}")
+        return JDExtraction(technical_stack=[], tools_and_platforms=[], domain_knowledge=[], soft_skills=[], years_experience_min=0)
+
+    # ==========================================
+    # STEP 2: THE JUDGE (High Precision)
+    # ==========================================
+    # The Judge takes the raw list AND the original JD to make decisions.
+    judge_llm = llm.with_structured_output(JDExtraction)
+
+    judge_prompt = ChatPromptTemplate.from_messages([
+        ("system", 
+         """You are a Senior Technical Recruiter acting as a Judge. 
+         You will receive a list of 'Potential Keywords' extracted from a Job Description.
+         
+         YOUR TASK:
+         Review the list against the original Job Description and produce a FINAL, CLEAN LIST.
+         
+         JUDGING RULES:
+         1. **Relevance:** Remove keywords that are mentioned but not required (unless they are a strong 'plus').
+         2. **Redundancy:** Deduplicate (e.g., if 'AWS' and 'Amazon Web Services' both exist, keep only 'AWS').
+         3. **Specificity:** Remove generic terms like "Coding", "Software", "Computer" unless they refer to a specific certification.
+         4. **Categorization:** Sort the remaining keywords strictly into the correct categories (Stack vs Tools vs Domain).
+         5. **Soft Skills:** Keep only the top 3-5 most emphasized soft skills. Delete generic fluff like "Hard worker".
+         """
+        ),
+        ("human", 
+         """
+         Original Job Description Context:
+         {jd_context}
+         
+         ---
+         Potential Keywords List (Draft):
+         {raw_list}
+         ---
+         
+         Produce the final approved list:
+         """)
+    ])
+    
+    judge_chain = judge_prompt | judge_llm
+
+    print("Step 2: Judging keywords (High Precision)...")
+    try:
+        final_data = judge_chain.invoke({
+            "jd_context": content_for_mining[:5000], # Summary context is usually enough
+            "raw_list": str(raw_data.raw_keywords)
+        })
+        print("Judge has finished filtering.")
+        return final_data
+    except Exception as e:
+        print(f"Judge Error: {e}")
+        return JDExtraction(technical_stack=[], tools_and_platforms=[], domain_knowledge=[], soft_skills=[], years_experience_min=0)
