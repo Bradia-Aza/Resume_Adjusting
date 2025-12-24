@@ -1,11 +1,19 @@
 import os
+import json
+import re
 from dotenv import load_dotenv
 from typing import List, Literal, Optional
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 
+
+
+####################################################################################################################################################
+####################################################################################################################################################
+###############################################################   ENRICH META DATA   ###############################################################
 
 
 # --- Schema 1: For files where we ALREADY know the section ---
@@ -118,8 +126,7 @@ def enrich_file_metadata(file_list: List[dict], gemini_api_key: str = None) -> L
                     "content": raw_content[:3000]
                 })
                 new_entry["title"] = response.title
-                new_entry["category"] = response.category
-                # Update the section key to the newly identified category for consistency
+                # Update the section key to the newly identified category
                 new_entry["section"] = response.category 
                 print(f"Filled Uncategorized -> [{response.category}] {response.title}")
 
@@ -140,8 +147,12 @@ def enrich_file_metadata(file_list: List[dict], gemini_api_key: str = None) -> L
             enriched_list.append(entry)
 
     return enriched_list
+    
 
-##################################################################################
+####################################################################################################################################################
+####################################################################################################################################################
+#######################################################   EXTRACT JOB DESCRIPION KEY WORDS   #######################################################
+
 
 # --- 1. Revert to Simple Schema (The Judge's Final Output) ---
 class JDExtraction(BaseModel):
@@ -158,20 +169,11 @@ class RawExtraction(BaseModel):
     raw_keywords: List[str] = Field(..., description="A comprehensive list of ALL potential keywords found in the text.")
     raw_years: int = Field(..., description="Years of experience found.")
 
-def extract_jd_features(jd_file_path: str, gemini_api_key: str = None) -> JDExtraction:
+def extract_jd_features(jd_text: str, gemini_api_key: str = None) -> JDExtraction:
     
     if not gemini_api_key: 
         load_dotenv()
         gemini_api_key = os.getenv("GOOGLE_API_KEY")
-
-    if not os.path.exists(jd_file_path):
-        raise FileNotFoundError(f"File not found: {jd_file_path}")
-        
-    try:
-        with open(jd_file_path, 'r', encoding='utf-8') as f:
-            jd_text = f.read()
-    except Exception as e:
-        raise IOError(f"Error reading file: {e}")
 
     # Use a stronger model for the Judge if possible, but Flash is fine for both.
     llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0, api_key=gemini_api_key)
@@ -256,3 +258,116 @@ def extract_jd_features(jd_file_path: str, gemini_api_key: str = None) -> JDExtr
     except Exception as e:
         print(f"Judge Error: {e}")
         return JDExtraction(technical_stack=[], tools_and_platforms=[], domain_knowledge=[], soft_skills=[], years_experience_min=0)
+
+####################################################################################################################################################
+####################################################################################################################################################
+################################################   TAILOR PROFILE AND HIGHLIGHT OF QUALIFICATIONS   ################################################
+
+
+# Helper to clean LLM output (LLMs often wrap JSON in markdown ```json ... ```)
+def parse_llm_json(llm_output):
+    try:
+        # Remove markdown code blocks if present
+        clean_text = re.sub(r'```json\n?|```', '', llm_output).strip()
+        return json.loads(clean_text)
+    except json.JSONDecodeError:
+        print("Error parsing JSON. Raw output:", llm_output)
+        return None
+
+
+def tailor_profile_and_highlights( resume_context, job_description, keywords, gemini_api_key:str = None ):
+    """
+    Args:
+        llm: Your configured LangChain LLM object
+        resume_context (str): The XML-like string built by your file loader
+        job_description (str): Text of the target JD
+        keywords (list): List of extracted keywords strings
+        
+    """
+
+    # API Key Setup
+    if not gemini_api_key: 
+        # Loads variables from .env file
+        load_dotenv()
+        gemini_api_key = os.getenv("GOOGLE_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI API KEY not found")
+
+    # Initialize Model
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        temperature=0,
+        api_key=gemini_api_key
+    )
+
+
+    prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are an expert career strategist and professional writer. "
+        "Your goal is to tailor resume sections to align with a job description while maintaining "
+        "strict honesty and a natural, human narrative flow. "
+        "You prioritize coherence and readability over keyword density."
+    ),
+    (
+        "human",
+        """
+    ### INPUT DATA
+    JOB DESCRIPTION:
+    {job_description}
+
+    TARGET KEYWORDS (Use only if applicable):
+    {keywords}
+
+    CURRENT RESUME CONTENT (Source of Truth):
+    {resume_context}
+
+    ### WRITING GUIDELINES
+    1. **Truth Anchor:** All claims must be supported by evidence in the `CURRENT RESUME CONTENT`. Do not invent skills or experiences just to match the JD.
+    2. **Selective Integration:** Do NOT try to use every keyword. Only include keywords from the list that genuinely match the user's existing experience. If a keyword doesn't fit naturally, discard it.
+    3. **Human Tone:** Avoid buzzword-stuffing. Write in a confident, professional, yet conversational tone. Use varied sentence structures to avoid a robotic feel.
+
+    ### INSTRUCTIONS
+    1. Analyze the <component section='Profile'> and <component section='Highlights'> in the provided resume.
+    2. Rewrite the **"Profile"** (3–4 sentences):
+       - Create a narrative hook connecting the user's actual background to the JD's biggest pain point.
+       - Focus on the *value* the user brings, rather than listing skills.
+    3. Rewrite the **"Highlights"** (4–6 bullet points):
+       - Select the strongest matches between the user's history and the JD.
+       - Focus on outcomes and impact, using the keywords only where they enhance the description.
+    4. **Strict Output:** Return ONLY a valid JSON object.
+    
+    ### STYLE GUARDRAILS (STRICT):
+    1. **Ban Meta-Phrases:** Do not use phrases like "demonstrated history of," "proven track record," "showcasing expertise in," or "proficiency in." Just state the action (e.g., instead of "Demonstrated ability to code in Python," write "Coded in Python").
+    2. **No Mission Statement Mimicry:** Do not copy the company's high-level mission (e.g., "societal benefit," "industry-defining") into the user's profile. Keep the profile focus on the *technical value* the user adds.
+    3. **Simplify Connectors:** Avoid the word "leveraging." Use "using" or "utilizing."
+
+    ### JSON SCHEMA
+    {{
+        "profile": "The humanized, coherent paragraph...",
+        "highlights": [
+            "Impact-driven bullet point 1...",
+            "Impact-driven bullet point 2..."
+        ]
+    }}
+    """
+    )
+    ])  
+    # Format the prompt
+    formatted_prompt = prompt.format_messages(
+        job_description=job_description,
+        keywords=", ".join(keywords),
+        resume_context=resume_context
+    )
+    
+    # Invoke LLM (adjust syntax depending on your LangChain version)
+    response = llm.invoke(formatted_prompt)
+    
+    # Handle response (if your LLM returns an object, extract .content, otherwise use string)
+    response_text = response.content if hasattr(response, 'content') else str(response)
+    
+    # Parse into Python Dictionary
+    data = parse_llm_json(response_text)
+    
+    return data
+
