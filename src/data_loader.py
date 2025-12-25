@@ -132,6 +132,34 @@ def rebase_dependency_paths(dependency_list, new_project_root, old_project_root=
 
 ####################################################################################################################################################
 ####################################################################################################################################################
+########################################################  REFORMAT DEPENDENCIES LIST  #########################################################
+
+
+def create_dep_map(dependency_list):
+    """
+    Transforms the list of dicts into a nested dictionary for fast lookup.
+    Structure: { 'SECTION_NAME': { 'Title Name': 'full/path/to/file.tex' } }
+    """
+    file_map = {}
+    
+    for entry in dependency_list:
+        section = entry['section']
+        title = entry['title']
+        full_path = entry['full_path']
+        
+        # If section doesn't exist, create it
+        if section not in file_map:
+            file_map[section] = {}
+            
+        # Add the title and path
+        file_map[section][title] = full_path
+        
+    return file_map
+
+
+
+####################################################################################################################################################
+####################################################################################################################################################
 ########################################################  BUILD RESUME USING DEPENDENCIES  #########################################################
 
 
@@ -145,9 +173,9 @@ def build_resume_context(dependency_list):
     for item in dependency_list:
         path = item['full_path']
         section = item['section']
-        title = item.get('title', 'Untitled') # Use .get() in case title is missing
+        title = item.get('title', 'Untitled') 
         
-        # 1. Read the file content
+        # Read the file content
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
@@ -213,29 +241,78 @@ def flatten_pydantic(extraction_obj, target_keys):
 #################################################  WRITE LATEX CODE FOR PROFILE AND QUALIFICATION ##################################################
 
 
-def convert_profile_latex(tailored_data):
+def convert_to_latex(content):
     """
-    Takes the pure text dictionary(for profile and highlight of qualifications) and wraps it in LaTeX syntax.
+    Converts raw text or a list of strings into valid LaTeX syntax.
+
+    Args:
+        content (str or list): The raw content to format.
+                               - If str: Returns the string as-is (or safe for LaTeX).
+                               - If list: Wraps items in a LaTeX 'itemize' environment.
+
+    Returns:
+        str: The formatted LaTeX code, or None if input is empty/invalid.
     """
-    if not tailored_data:
-        return None, None
+    # Safety Check: Return None if data is empty
+    if not content:
+        return None
 
-    # Format Profile
-    # Assuming profile.tex just needs the text, or \cvsection{Profile} + text
-    profile_latex = tailored_data['profile'] 
+    # Handle String Input (e.g., Profile Summary)
+    if isinstance(content, str):
+        # Return the string directly. 
+        # (Optional: You could add a helper here to escape special chars like % or &)
+        return content
 
-    # Format Highlights
-    # We construct the itemize environment programmatically
-    highlights_items = "\n".join([f"\\item {item}" for item in tailored_data['highlights']])
-    highlights_latex = (
-        "\\begin{itemize}\n"
-        f"{highlights_items}\n"
-        "\\end{itemize}"
-    )
+    # Handle List Input (e.g., Highlights of Qualifications)
+    elif isinstance(content, list):
+        # Convert each list item into a \item line
+        # We use a list comprehension for efficiency
+        items_latex = "\n    ".join([f"\\item {item}" for item in content])
+        
+        # Wrap the items in the itemize environment
+        latex_block = (
+            "\\begin{itemize}\n"
+            f"    {items_latex}\n"
+            "\\end{itemize}"
+        )
+        return latex_block
+
+    # Handle Unsupported Types
+    else:
+        print(f"Warning: Unsupported type {type(content)} passed to convert_to_latex.")
+        return None
+
+
+####################################################################################################################################################
+####################################################################################################################################################
+###################################################   WRITE THE LATEX CODE IN THE DESIRED FILE   ###################################################
+
+
+def write_section_content(file_map, section, title, content_data):
+    """
+    Writes string content to a specific resume file identified by section and title.
+    """
     
-    return profile_latex, highlights_latex
+    # 1. Locate the file path using the map
+    try:
+        target_path = file_map[section][title]
+    except KeyError:
+        print(f"Error: Could not find file path for Section: '{section}', Title: '{title}'")
+        return False
 
-
-
+    # 2. Check if content is String AND Path exists
+    # We use 'and' instead of '&', and ensure the logic flows correctly
+    if isinstance(content_data, str) and os.path.exists(target_path):
+        try:
+            with open(target_path, 'w', encoding='utf-8') as f:
+                f.write(content_data)
+            print(f"Updated: {title}")
+            return True
+        except Exception as e:
+            print(f"Error writing to {target_path}: {e}")
+            return False
+    else:
+        print(f"Error: Content must be 'str' and path must exist. Got type: {type(content_data)}")
+        return False
 
     
