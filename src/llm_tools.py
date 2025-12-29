@@ -2,7 +2,7 @@ import os
 import json
 import re
 from dotenv import load_dotenv
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -369,5 +369,107 @@ def tailor_profile_and_highlights( resume_context, job_description, keywords, ge
     # Parse into Python Dictionary
     data = parse_llm_json(response_text)
     
-    return data
+    return datae
+
+
+####################################################################################################
+
+
+
+def rank_experiences(jd: str, experience_list: List[str], rsm_exp: str, gemini_api_key: str = None) -> List[str]:
+    """
+    Reorders a list of candidate experiences based on their relevance to a job description using Gemini.
+
+    Args:
+        jd (str): The full text of the Job Description.
+        experience_list (List[str]): A list of experience titles (or identifiers) to be sorted.
+        rsm_exp (str): The detailed text content of the candidate's projects/experiences.
+        gemini_api_key (str, optional): Google API Key. If None, attempts to load from environment.
+
+    Returns:
+        List[str]: The 'experience_list' reordered by relevance. 
+                   Returns the original list if JSON parsing fails.
+
+    Raises:
+        ValueError: If the Gemini API key is missing.
+    """
+    
+    # --- 1. API Key Setup ---
+    if not gemini_api_key: 
+        # Loads variables from .env file if not passed explicitly
+        load_dotenv()
+        gemini_api_key = os.getenv("GOOGLE_API_KEY")
+        
+        if not gemini_api_key:
+            raise ValueError("GEMINI API KEY not found. Please set it in .env or pass it as an argument.")
+
+    # --- 2. Initialize Model ---
+    # We use a temperature of 0 for deterministic (consistent) ranking results
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.0-flash",
+        temperature=0,
+        api_key=gemini_api_key
+    )
+
+    # --- 3. Define the Prompt ---
+    # We use `from_template` because we are passing a single string instructions block.
+    template_text = """
+    You are an expert technical recruiter. Reorder the candidate's projects based on relevance to the Job Description.
+
+    JOB DESCRIPTION:
+    {job_description}
+
+    CANDIDATE'S PROJECTS (Detailed Context):
+    {resume_exp}
+
+    LIST OF TITLES TO SORT:
+    {experience_list}
+
+    INSTRUCTIONS:
+    1. Read the content of each project (in CANDIDATE'S PROJECTS) to understand the actual skills used (e.g., Python, RAG, React).
+    2. Compare these skills to the Job Description requirements.
+    3. Rank the items in "LIST OF TITLES TO SORT" from MOST RELEVANT to LEAST RELEVANT.
+    4. Return ONLY a valid JSON list of strings from the experience list.
+    
+    OUTPUT FORMAT:
+    Return a raw JSON list of strings. Do not include markdown formatting.
+    Example: ["Title B", "Title A", "Title C"]
+    """
+    
+    prompt = ChatPromptTemplate.from_template(template_text)
+
+    # --- 4. Chain Execution ---
+    # We pipe the formatted prompt directly to the LLM
+    chain = prompt | llm
+    
+    print(" Asking LLM to rank experiences based on context...")
+    
+    # invoke() automatically formats the prompt using the dictionary provided
+    response = chain.invoke({
+        "job_description": jd,
+        "resume_exp": rsm_exp,
+        "experience_list": json.dumps(experience_list) # Converting list to string for safer prompt injection
+    })
+    
+    # --- 5. Output Parsing ---
+    response_text = response.content
+    
+    try:
+        # Clean up potential markdown code blocks (e.g., ```json ... ```)
+        clean_text = re.sub(r'```json\n?|```', '', response_text).strip()
+        
+        # Parse the string into a Python list
+        sorted_titles = json.loads(clean_text)
+        
+        # Validation: Ensure the output is actually a list
+        if isinstance(sorted_titles, list):
+            return sorted_titles
+        else:
+            print(f"Warning: LLM returned valid JSON but not a list. Type: {type(sorted_titles)}")
+            return experience_list
+
+    except json.JSONDecodeError:
+        print(f"Error parsing JSON. Raw response: {response_text}")
+        # Fallback: return original order so the pipeline doesn't crash
+        return experience_list
 

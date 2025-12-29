@@ -5,8 +5,6 @@ import pathlib as Path
 import pickle
 
 
-
-
 ####################################################################################################################################################
 ####################################################################################################################################################
 #############################################################  EXTRACT DEPENDENCIES   ##############################################################
@@ -315,4 +313,52 @@ def write_section_content(file_map, section, title, content_data):
         print(f"Error: Content must be 'str' and path must exist. Got type: {type(content_data)}")
         return False
 
+
+####################################################################################################################################################
+####################################################################################################################################################
+##########################################################   Reorder Experience Section   ##########################################################
+
+def exp_reorder(file_path, ranked_keys, bridge_dict):
+    """
+    Replaces the LaTeX content between two %exp comment anchors 
+    with a new order of subimports.
+    """
+    # Create the new string and escape backslashes for the Regex engine
+    new_experience_block = "\n".join([bridge_dict[key] for key in ranked_keys])
+    safe_experience_block = new_experience_block.replace("\\", "\\\\")
+    
+    #Read the main file
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    #Define the Pattern to look for %exp anchors
+    # % is a special char in some contexts, but here it matches literally.
+    # We look for %exp ... some content ... %exp
+    pattern = r"(%exp)(.*?)(%exp)"
+    
+    #Check if the anchors exist before proceeding
+    if not re.search(pattern, content, flags=re.DOTALL):
+        print("Error: The comment anchors '%exp' were not found in the file.")
+        print("Instruction: Please wrap your experience subimports in your main.tex like this:")
+        print("\n%exp\n\\subimport{...}{...}\n%exp\n")
+        return False
+
+    #Perform the substitution
+    # \1 is the first %exp, \3 is the second %exp
+    new_content = re.sub(
+        pattern, 
+        rf"\1\n{safe_experience_block}\n\3", 
+        content, 
+        flags=re.DOTALL
+    )
+
+    #Write back to the file
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+        print(f"Successfully reordered {len(ranked_keys)} experiences in {file_path}")
+        return True
+    except Exception as e:
+        print(f"Failed to write to file: {e}")
+        return False
     
