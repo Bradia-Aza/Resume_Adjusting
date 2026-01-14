@@ -1,8 +1,41 @@
 import os
 import re
 import copy
+import yaml
 import pathlib as Path
 import pickle
+
+
+####################################################################################################################################################
+####################################################################################################################################################
+##################################################################  FILE LOADER   ##################################################################
+
+def load_file(file_path, file_type='tex'):
+    """
+    Efficiently validates and loads tex, yml, or pkl files.
+    """
+    # 1. Validation
+    if not os.path.isfile(file_path):
+        print(f" Invalid file path: {file_path}")
+        return None
+
+    # 2. Loading Logic
+    try:
+        # Pickle requires binary mode ('rb'), others use text mode ('r')
+        mode = 'rb' if file_type == 'pkl' else 'r'
+        encoding = None if file_type == 'pkl' else 'utf-8'
+
+        with open(file_path, mode, encoding=encoding) as f:
+            if file_type == 'yml':
+                return yaml.safe_load(f)
+            elif file_type == 'pkl':
+                return pickle.load(f)
+            else:
+                return f.read()
+
+    except Exception as e:
+        print(f" Error loading {file_type} file at {file_path}: {e}")
+        return None
 
 
 ####################################################################################################################################################
@@ -241,7 +274,7 @@ def flatten_pydantic(extraction_obj, target_keys):
 
 def convert_to_latex(content):
     """
-    Converts raw text or a list of strings into valid LaTeX syntax.
+    Converts raw text or a list of strings into valid LaTeX syntax escaping the invalid charecters at the same time
 
     Args:
         content (str or list): The raw content to format.
@@ -251,66 +284,112 @@ def convert_to_latex(content):
     Returns:
         str: The formatted LaTeX code, or None if input is empty/invalid.
     """
-    # Safety Check: Return None if data is empty
+
     if not content:
         return None
 
-    # Handle String Input (e.g., Profile Summary)
-    if isinstance(content, str):
-        # Return the string directly. 
-        # (Optional: You could add a helper here to escape special chars like % or &)
-        return content
+    #  Create a Translation Table for the invalid chars
+    latex_escapes = str.maketrans({
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+    })
 
-    # Handle List Input (e.g., Highlights of Qualifications)
+    # Handle String Input
+    if isinstance(content, str):
+        return content.translate(latex_escapes)
+
+    # Handle List Input
     elif isinstance(content, list):
-        # Convert each list item into a \item line
-        # We use a list comprehension for efficiency
-        items_latex = "\n    ".join([f"\\item {item}" for item in content])
+        # translate() is implemented in C, making it very fast for list processing
+        items = [f"\\item {str(item).translate(latex_escapes)}" for item in content]
         
-        # Wrap the items in the itemize environment
-        latex_block = (
+        return (
             "\\begin{itemize}\n"
-            f"    {items_latex}\n"
+            f"    {'\n    '.join(items)}\n"
             "\\end{itemize}"
         )
-        return latex_block
 
-    # Handle Unsupported Types
-    else:
-        print(f"Warning: Unsupported type {type(content)} passed to convert_to_latex.")
-        return None
-
+    return None
 
 ####################################################################################################################################################
 ####################################################################################################################################################
 ###################################################   WRITE THE LATEX CODE IN THE DESIRED FILE   ###################################################
 
 
+import os
+import re
+
 def write_section_content(file_map, section, title, content_data):
     """
-    Writes string content to a specific resume file identified by section and title.
+    Writes content to a LaTeX file. If the content is an itemized list, it 
+    identifies the itemize environment in the existing file and replaces 
+    only that block, preserving external headers or metadata.
+
+    Args:
+        file_map (dict): Mapping of {section: {title: path}}.
+        section (str): The category key for lookup.
+        title (str): The specific item title for lookup.
+        content_data (str): The new LaTeX content to be written.
+
+    Returns:
+        bool: True if write was successful, False otherwise.
     """
-    
-    # 1. Locate the file path using the map
+    #  Resolve file path from the mapping
     try:
         target_path = file_map[section][title]
     except KeyError:
-        print(f"Error: Could not find file path for Section: '{section}', Title: '{title}'")
+        print(f"Error: Key mismatch for section '{section}' and title '{title}'")
         return False
 
-    # 2. Check if content is String AND Path exists
-    # We use 'and' instead of '&', and ensure the logic flows correctly
-    if isinstance(content_data, str) and os.path.exists(target_path):
-        try:
-            with open(target_path, 'w', encoding='utf-8') as f:
-                f.write(content_data)
-            print(f"Updated: {title}")
-            return True
-        except Exception as e:
-            print(f"Error writing to {target_path}: {e}")
-            return False
-    else:
-        print(f"Error: Content must be 'str' and path must exist. Got type: {type(content_data)}")
+    #  Validate content type and file existence
+    if not isinstance(content_data, str) or not os.path.exists(target_path):
+        print(f"Error: Invalid content type or path does not exist: {target_path}")
+        return False
+
+    try:
+        #  Read existing file content
+        with open(target_path, 'r', encoding='utf-8') as f:
+            original_content = f.read()
+
+        #  Perform targeted replacement for itemized lists
+        # We look for \begin{itemize} to determine if this is a list update
+        if "\\begin{itemize}" in content_data:
+            pattern = r"\\begin\{itemize\}.*?\\end\{itemize\}"
+            
+            # If the original file contains a list, replace only that segment
+            if re.search(pattern, original_content, flags=re.DOTALL):
+                # We extract the clean list from the new data
+                new_list = re.search(pattern, content_data, flags=re.DOTALL).group(0)
+                
+                # Replace the old list with the new one. 
+                # .replace("\\", "\\\\") handles backslashes for the regex engine.
+                final_output = re.sub(
+                    pattern, 
+                    new_list.replace("\\", "\\\\"), 
+                    original_content, 
+                    flags=re.DOTALL
+                )
+            else:
+                # No existing list found in target file; proceed with full overwrite
+                final_output = content_data
+        else:
+            # For non-list sections (e.g., Profile), replace entire file content
+            final_output = content_data
+
+        #  Commit changes to disk
+        with open(target_path, 'w', encoding='utf-8') as f:
+            f.write(final_output)
+            
+        print(f"Successfully updated: {title}")
+        return True
+
+    except Exception as e:
+        print(f"Error occurred while writing to {target_path}: {e}")
         return False
 
 

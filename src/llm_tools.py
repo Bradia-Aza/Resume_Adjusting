@@ -1,12 +1,14 @@
 import os
 import json
 import re
+import yaml
 from dotenv import load_dotenv
 from typing import List, Literal, Optional, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 
 
@@ -372,8 +374,10 @@ def tailor_profile_and_highlights( resume_context, job_description, keywords, ge
     return datae
 
 
-####################################################################################################
 
+####################################################################################################################################################
+####################################################################################################################################################
+###############################################################   RANK EXPERIENCES   ###############################################################
 
 
 def rank_experiences(jd: str, experience_list: List[str], rsm_exp: str, gemini_api_key: str = None) -> List[str]:
@@ -472,4 +476,89 @@ def rank_experiences(jd: str, experience_list: List[str], rsm_exp: str, gemini_a
         print(f"Error parsing JSON. Raw response: {response_text}")
         # Fallback: return original order so the pipeline doesn't crash
         return experience_list
+
+
+####################################################################################################################################################
+####################################################################################################################################################
+#######################################################   TAILOR EXPERIENCE BULLET POINTS   ########################################################
+
+
+class BulletPoints(BaseModel):
+    points: List[str] = Field(description="List of impact-focused resume bullet points.")
+
+
+def refined_exp_bullets(
+    project_data: dict,
+    jd: str,
+    keywords: List[str],
+    num_bullets: int = 3,
+    gemini_api_key: str = None
+) -> List[str]:
+    """Generate refined resume bullet points using Gemini + structured output."""
+
+    # --- API Key Setup ---
+    if not gemini_api_key:
+        load_dotenv()
+        gemini_api_key = os.getenv("GOOGLE_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI API KEY not found. Please set it in .env or pass it explicitly.")
+
+    # --- Robust Extraction of data ---
+    name = project_data.get('project_name', 'Technical Project')
+    objective = project_data.get('high_level_objective', '')
+    stack = project_data.get('technical_stack', [])
+    raw_achievements = project_data.get('raw_achievements', [])
+
+    # --- LLM Setup (STRUCTURED mode) ---
+    base_llm = ChatGoogleGenerativeAI(
+        model="gemini-2.0-flash-lite",
+        api_key=gemini_api_key,
+        temperature=0.1
+    )
+
+    llm = base_llm.with_structured_output(BulletPoints)
+
+    # --- Prompt ---
+    template = """
+    You are an expert Technical Resume Writer. 
+    Refine the "Raw Achievements" into {num_bullets} targeted resume bullet points.
+
+    PROJECT CONTEXT:
+    - Name: {name}
+    - Objective: {objective}
+    - Technical Stack:
+    {stack}
+
+    RAW DATA:
+    {raw_data}
+
+    TARGET:
+    - Job Description: {jd}
+    - Keywords: {keywords}
+
+    INSTRUCTIONS:
+    1. Use the Action-Impact (XYZ) framework.
+    2. Focus on the most technically challenging aspects relevant to the JD.
+    3. Integrate priority keywords naturally.
+    4. Return exactly {num_bullets} resume-appropriate bullet points.
+    """
+
+    prompt = ChatPromptTemplate.from_template(template)
+
+    chain = prompt | llm
+
+    # --- Invoke ---
+    response: BulletPoints = chain.invoke({
+        "name": name,
+        "objective": objective,
+        "stack": "\n".join(stack),
+        "raw_data": "\n".join(raw_achievements),
+        "jd": jd,
+        "keywords": ", ".join(keywords),
+        "num_bullets": num_bullets,
+    })
+
+    # --- return list[str] ---
+    return response.points
+
 
