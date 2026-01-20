@@ -297,7 +297,7 @@ def tailor_profile_and_highlights( resume_context, job_description, keywords, ge
 
     # Initialize Model
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-2.0-flash",
         temperature=0,
         api_key=gemini_api_key
     )
@@ -371,7 +371,7 @@ def tailor_profile_and_highlights( resume_context, job_description, keywords, ge
     # Parse into Python Dictionary
     data = parse_llm_json(response_text)
     
-    return datae
+    return data
 
 
 
@@ -520,27 +520,35 @@ def refined_exp_bullets(
 
     # --- Prompt ---
     template = """
-    You are an expert Technical Resume Writer. 
-    Refine the "Raw Achievements" into {num_bullets} targeted resume bullet points.
-
+    You are a pragmatic Senior Engineer and Resume Strategist.
+    Refine the "Raw Achievements" into {num_bullets} high-impact bullet points.
+    
+    ### INPUT DATA
     PROJECT CONTEXT:
     - Name: {name}
     - Objective: {objective}
-    - Technical Stack:
-    {stack}
-
-    RAW DATA:
+    - Technical Stack: {stack}
+    
+    RAW DATA (Source of Truth):
     {raw_data}
-
-    TARGET:
+    
+    TARGETING:
     - Job Description: {jd}
-    - Keywords: {keywords}
-
-    INSTRUCTIONS:
-    1. Use the Action-Impact (XYZ) framework.
-    2. Focus on the most technically challenging aspects relevant to the JD.
-    3. Integrate priority keywords naturally.
-    4. Return exactly {num_bullets} resume-appropriate bullet points.
+    - Priority Keywords: {keywords}
+    
+    ### STRICT WRITING RULES
+    1. **Length Constraint:** Each bullet point must be **under 35 words**. It should fit on 1 to 1.5 lines maximum. If a bullet is too long, split it or condense the phrasing.
+    2. **Tone & Style:**
+       - Use the **Active Voice** (e.g., "Built," "Deployed," "Refactored").
+       - **Banned Words:** Do not use fluff words like "spearheaded," "visionary," "synergized," or "demonstrated ability to."
+       - Sound like an engineer, not a marketing brochure. Focus on the *technical implementation*.
+    3. **The "How" & "Why":** Connect the `{stack}` to the outcome.
+       - *Bad:* "Used Python to improve system."
+       - *Good:* "Automated data ingestion using Python and Pandas, reducing processing time by 40%."
+    4. **Metric Integrity:** If the raw data has numbers, use them. If not, focus on **qualitative impact** (e.g., "eliminating manual entry," "ensuring thread safety")—do NOT invent fake percentages.
+    
+    ### OUTPUT FORMAT
+    Return exactly {num_bullets} bullet points as a plain text list.
     """
 
     prompt = ChatPromptTemplate.from_template(template)
@@ -562,3 +570,138 @@ def refined_exp_bullets(
     return response.points
 
 
+####################################################################################################################################################
+####################################################################################################################################################
+###############################################################   GENERATE SKILLS   ################################################################
+
+
+# Use a generic Dict for dynamic keys
+class DynamicSkills(BaseModel):
+    skills: Dict[str, List[str]] = Field(
+        description="A dictionary where keys are category names and values are lists of skills."
+    )
+
+def generate_skills(
+    jd: str, 
+    keywords: List[str], 
+    resume_text: str, 
+    gemini_api_key: str = None
+) -> Dict[str, List[str]]:
+    """
+    Dynamically categorizes skills based on JD relevance and candidate's resume.
+    """
+    # --- API Key Setup ---
+    if not gemini_api_key:
+        load_dotenv()
+        gemini_api_key = os.getenv("GOOGLE_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI API KEY not found. Please set it in .env or pass it explicitly.")
+    
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.0-flash", 
+        api_key=gemini_api_key, 
+        temperature=0 # Consistency is key for skills
+    )
+    parser = PydanticOutputParser(pydantic_object=DynamicSkills)
+
+    template = """
+    You are an expert Technical Recruiter. Create a highly targeted Skills section for a candidate.
+
+    INPUTS:
+    - Job Description: {jd}
+    - Keywords: {keywords}
+    - Candidate Resume: {resume}
+
+    INSTRUCTIONS:
+    1. Identify the core skill "themes" required by the Job Description.
+    2. Create 3 to 5 dynamic categories based on these themes. 
+    3. Fill these categories with skills from the Candidate Resume and the JD/Keywords.
+    4. MANDATORY: Use the EXACT wording found in the Job Description or Keywords.
+    5. Do not include categories that the candidate has no evidence for in their resume.
+    6. Ensure the result is a valid JSON object.
+
+    {format_instructions}
+    """
+
+    prompt = ChatPromptTemplate.from_template(template)
+    
+    chain = prompt | llm | parser
+    
+    response = chain.invoke({
+        "jd": jd,
+        "keywords": ", ".join(keywords),
+        "resume": resume_text,
+        "format_instructions": parser.get_format_instructions()
+    })
+
+    # We return just the 'skills' dictionary
+    return response.skills
+
+#       (e.g., 'Core AI & Machine Learning', 'Cloud Infrastructure', 'Development Tools',etc).
+
+
+####################################################################################################################################################
+####################################################################################################################################################
+############################################################   GENERATE COVER LETTER   #############################################################
+
+
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+def generate_cover_letter(
+    jd: str, 
+    keywords: list, 
+    resume_text: str, 
+    gemini_api_key: str = None
+) -> str:
+    """
+    Generates a simple, enthusiastic, and humanized cover letter.
+    """
+
+
+    # --- API Key Setup ---
+    if not gemini_api_key:
+        load_dotenv()
+        gemini_api_key = os.getenv("GOOGLE_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI API KEY not found. Please set it in .env or pass it explicitly.")
+    
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash", 
+        api_key=gemini_api_key, 
+        temperature=0.6 # Slightly higher temperature for a more natural, human "voice"
+    )
+
+    template = """
+    You are a talented engineer applying for a dream job. 
+    Write a cover letter that sounds like a real person—enthusiastic, simple, and passionate.
+
+    CONTEXT:
+    - Job Description: {jd}
+    - Key Skills to Highlight: {keywords}
+    - My Resume Background: {resume}
+
+    WRITING GUIDELINES:
+    1. TONE: Simple, conversational, and high-energy. Avoid "corporate speak" or sounding like a robot.
+    2. THE HOOK: Start with a clear reason why I am excited about this specific role. 
+    3. THE VALUE: Pick one or two specific achievements from my resume that prove I love solving the types of problems mentioned in the JD.
+    4. PASSION: Make it clear that I'm not just looking for "a job," but that I genuinely love what I do (e.g., coding, building AI, solving complex puzzles).
+    5. STRUCTURE: Keep it to 3-5, punchy paragraphs. 
+    6. SIGN-OFF: End with a friendly, confident call to action.
+
+    MANDATORY: Do not use words like 'vibrant', 'delighted', 'synergy', or 'fast-paced environment'. Use simple words that a real person uses.
+    """
+
+    prompt = ChatPromptTemplate.from_template(template)
+    
+    # We use a simple StrOutputParser since we want a formatted block of text
+    chain = prompt | llm | StrOutputParser()
+    
+    cover_letter = chain.invoke({
+        "jd": jd,
+        "keywords": ", ".join(keywords),
+        "resume": resume_text
+    })
+
+    return cover_letter

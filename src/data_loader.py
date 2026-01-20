@@ -4,7 +4,9 @@ import copy
 import yaml
 import pathlib as Path
 import pickle
-
+import subprocess
+from fpdf import FPDF
+from datetime import datetime
 
 ####################################################################################################################################################
 ####################################################################################################################################################
@@ -274,21 +276,22 @@ def flatten_pydantic(extraction_obj, target_keys):
 
 def convert_to_latex(content):
     """
-    Converts raw text or a list of strings into valid LaTeX syntax escaping the invalid charecters at the same time
+    Converts raw text, lists, or dictionaries into valid LaTeX syntax.
+    Escapes LaTeX reserved characters and applies specific formatting based on type.
 
     Args:
-        content (str or list): The raw content to format.
-                               - If str: Returns the string as-is (or safe for LaTeX).
-                               - If list: Wraps items in a LaTeX 'itemize' environment.
+        content (str, list, or dict): 
+            - str: Returns escaped string.
+            - list: Returns escaped items in an itemize environment.
+            - dict: Returns \item \textbf{key:} value in an itemize environment.
 
     Returns:
-        str: The formatted LaTeX code, or None if input is empty/invalid.
+        str: Formatted LaTeX code, or None if input is empty/invalid.
     """
-
     if not content:
         return None
 
-    #  Create a Translation Table for the invalid chars
+    # Create a Translation Table for LaTeX reserved characters
     latex_escapes = str.maketrans({
         "&": r"\&",
         "%": r"\%",
@@ -299,14 +302,36 @@ def convert_to_latex(content):
         "}": r"\}",
     })
 
-    # Handle String Input
+    # Handle String Input (e.g., Professional Summary)
     if isinstance(content, str):
         return content.translate(latex_escapes)
 
-    # Handle List Input
+    # Handle List Input (e.g., General Highlights)
     elif isinstance(content, list):
-        # translate() is implemented in C, making it very fast for list processing
         items = [f"\\item {str(item).translate(latex_escapes)}" for item in content]
+        return (
+            "\\begin{itemize}\n"
+            f"    {'\n    '.join(items)}\n"
+            "\\end{itemize}"
+        )
+
+    # Handle Dictionary Input (e.g., Technical Skills)
+    elif isinstance(content, dict):
+        items = []
+        for key, value in content.items():
+            # Clean the key
+            clean_key = str(key).translate(latex_escapes)
+            
+            # Check if the value is a list; if so, join with commas
+            if isinstance(value, list):
+                processed_val = ", ".join(str(v) for v in value)
+            else:
+                processed_val = str(value)
+            
+            # Clean the resulting value string
+            clean_val = processed_val.translate(latex_escapes)
+            
+            items.append(f"\\item \\textbf{{{clean_key}:}} {clean_val}")
         
         return (
             "\\begin{itemize}\n"
@@ -316,13 +341,11 @@ def convert_to_latex(content):
 
     return None
 
+
 ####################################################################################################################################################
 ####################################################################################################################################################
 ###################################################   WRITE THE LATEX CODE IN THE DESIRED FILE   ###################################################
 
-
-import os
-import re
 
 def write_section_content(file_map, section, title, content_data):
     """
@@ -440,4 +463,129 @@ def exp_reorder(file_path, ranked_keys, bridge_dict):
     except Exception as e:
         print(f"Failed to write to file: {e}")
         return False
+
+####################################################################################################################################################
+####################################################################################################################################################
+##############################################################   Compile Latex File   ##############################################################
+
+
+def compile_latex(main_file_path, output_dir=None):
+    """
+    Refined LuaLaTeX compiler that handles complex paths by 
+    isolating the working directory.
+    """
+    # 1. Expand to absolute path to avoid any ambiguity
+    abs_main_path = os.path.abspath(main_file_path)
     
+    if not os.path.isfile(abs_main_path):
+        print(f"Error: File not found at {abs_main_path}")
+        return False
+
+    # 2. Split path into directory and filename
+    # This allows us to 'cd' into the folder and run the file by name
+    file_dir = os.path.dirname(abs_main_path)
+    file_name = os.path.basename(abs_main_path)
+    
+    target_output = os.path.abspath(output_dir) if output_dir else file_dir
+
+    # 3. Construct the command
+    # We use the file_name only because we will set the cwd to file_dir
+    command = [
+        "lualatex",
+        "-interaction=nonstopmode",
+        f"-output-directory={target_output}",
+        file_name
+    ]
+
+    try:
+        for pass_count in range(1, 3):
+            print(f"Executing LuaLaTeX pass {pass_count}...")
+            
+            result = subprocess.run(
+                command,
+                cwd=file_dir,  # Crucial: Change context to the folder itself
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            if result.returncode != 0:
+                print(f"Error: Compilation failed during pass {pass_count}")
+                # Log the bottom of the stdout to see the specific LaTeX error
+                log_lines = result.stdout.splitlines()
+                print("\n".join(log_lines[-20:]))
+                return False
+
+        print(f"Successfully compiled: {file_name}")
+        return True
+
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return False
+
+
+####################################################################################################################################################
+####################################################################################################################################################
+##########################################################   BUILD PDF FILE FROM STRING   ##########################################################
+
+
+def convert_str_to_pdf(content_str: str, output_dir: str, output_filename: str = "Cover_Letter.pdf"):
+    """
+    Converts a plain text string into a professional PDF cover letter using FPDF2.
+    Saves the file to the specified output directory.
+    """
+
+    # Sanitize text for standard PDF fonts (Times does not support Unicode – dashes)
+    replacements = {
+        "\u2013": "-", 
+        "\u2014": "--", 
+        "\u2018": "'", 
+        "\u2019": "'", 
+        "\u201c": '"', 
+        "\u201d": '"', 
+        "\u2026": "..."
+    }
+    
+    for char, replacement in replacements.items():
+        content_str = content_str.replace(char, replacement)
+    
+    # Ensure the directory exists
+    if not os.path.exists(output_dir):
+        print(f"Output dir not found: {output_dir}")
+        return False
+
+    # Construct the full file path
+    full_path = os.path.join(output_dir, output_filename)
+
+    # Initialize PDF (A4 size)
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_margins(left=25.4, top=25.4, right=25.4) 
+    pdf.add_page()
+    
+    # Set Font
+    pdf.set_font("Times", size=12)
+    
+    # Add Date (Top Right)
+    date_str = datetime.now().strftime("%B %d, %Y")
+    pdf.set_xy(150, 20)
+    pdf.cell(0, 10, date_str, align='R')
+    
+    # Move to Content Area
+    pdf.set_y(40)
+    
+    # Handle the main text content
+    paragraphs = content_str.split('\n\n')
+    for para in paragraphs:
+        if para.strip():
+            pdf.multi_cell(w=0, h=6, text=para.strip(), align='L')
+            pdf.ln(5) 
+
+    # 3. Output the file to the full path
+    try:
+        pdf.output(full_path)
+        print(f"Success! PDF saved at: {full_path}")
+        return True
+    except Exception as e:
+        print(f"Error generating PDF: {e}")
+        return False
+
