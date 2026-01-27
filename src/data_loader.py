@@ -2,7 +2,8 @@ import os
 import re
 import copy
 import yaml
-import pathlib as Path
+import re
+from pathlib import Path
 import pickle
 import subprocess
 from fpdf import FPDF
@@ -44,71 +45,44 @@ def load_file(file_path, file_type='tex'):
 ####################################################################################################################################################
 #############################################################  EXTRACT DEPENDENCIES   ##############################################################
 
-def extract_latex_dependencies(main_file_path: str) -> list[dict] | dict:
+
+def component_registry(components_path: str) -> Dict[str, Dict[str, str]]:
     """
-    Parses a main LaTeX file to identify imported sub-files and the 
-    corresponding section they belong to.
-
-    It extracts files linked by commands like \\input, \\include, and 
-    \\subimport, categorizing them under the most recently encountered 
-    \\resumesection command.
-
-    Args:
-        main_file_path: The absolute or relative path to the main .tex file.
-
-    Returns:
-        A list of dictionaries, where each dictionary represents a dependency 
-        and contains the keys 'section' (str) and 'full_path' (str).
-        Returns a dictionary with an 'error' key if the main file is not found.
+    Crawls the components directory to build a map of available LaTeX files.
+    
+    Structure:
+    registry[folder_name][file_name_lowercase] = full_path
+    
+    Example:
+    registry['projects']['housing'] = 'components/projects/Housing.tex'
     """
-    
-    dependencies = []
-    # Determine the base directory for resolving relative paths
-    base_dir = os.path.dirname(main_file_path)
-    
-    try:
-        with open(main_file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-    except FileNotFoundError:
-        return {"error": f"File not found at {main_file_path}"}
+    registry = {}
+    base_path = Path(components_path)
 
-    # Regex captures: (1) command, (2) first argument, (3) optional second argument
-    pattern = re.compile(r'\\(input|include|subimport|resumesection)\{([^}]+)\}(?:\{([^}]+)\})?')
-    
-    current_section = "Uncategorized" # State variable for section context
+    # Walk through the directory structure
+    for root, dirs, files in os.walk(base_path):
+        root_path = Path(root)
+        
+        # We only care about folders that actually contain .tex files
+        # The folder name becomes our 'category'
+        category = root_path.name
+        
+        # Skip the base directory itself if it has no category name
+        if category == base_path.name:
+            continue
 
-    for match in pattern.finditer(content):
-        command = match.group(1)
-        arg1 = match.group(2).strip()
-        arg2 = match.group(3).strip() if match.group(3) else None
-
-        # If it's a section header, update the current context
-        if command == 'resumesection':
-            current_section = arg1
-        # Otherwise, process it as a file dependency
-        else:
-            entry = {
-                "section": current_section,
-                "full_path": None
-            }
-
-            if command == 'subimport' and arg2:
-                # Handle \subimport{dir}{file}
-                combined_path = os.path.join(base_dir, arg1, arg2)
-            else:
-                # Handle \input{file} or \include{file}
-                combined_path = os.path.join(base_dir, arg1)
-
-            # Resolve and normalize the final path
-            entry["full_path"] = os.path.normpath(combined_path)
-
-            # Ensure the dependency has the .tex extension
-            if not entry["full_path"].endswith('.tex'):
-                entry["full_path"] += ".tex"
+        for file in files:
+            if file.endswith(".tex"):
+                # Clean the filename to use as a key (e.g., 'Housing.tex' -> 'housing')
+                project_id = file.replace(".tex", "").lower()
                 
-            dependencies.append(entry)
+                if category not in registry:
+                    registry[category] = {}
+                
+                # Store the absolute or relative path for later reading/writing
+                registry[category][project_id] = str(root_path / file)
 
-    return dependencies
+    return registry
 
 
 ####################################################################################################################################################
@@ -116,78 +90,49 @@ def extract_latex_dependencies(main_file_path: str) -> list[dict] | dict:
 ############################################################  ADJUST DEPENDENCIES PATH  ############################################################
 
 
-def rebase_dependency_paths(dependency_list, new_project_root, old_project_root=None):
+def rebase_dependencies(registry, new_project_root, old_project_root=None):
     """
-    Updates the 'full_path' in the dependency list to point to the new directory.
+    Updates all file paths in the nested registry dictionary to point to a new directory.
     
     Args:
-        dependency_list (list): Your list of dicts.
-        new_project_root (str): The absolute path to your COPIED resume folder.
-        old_project_root (str, optional): The old root. If None, it attempts to 
-                                          auto-detect it based on the common prefix.
+        registry (dict): The nested dict from component_registry.
+        new_project_root (str): The path to the new destination folder.
+        old_project_root (str, optional): The original root to strip away. 
+                                          If None, it auto-detects from the first path found.
     """
-    # Create a deep copy so we don't mess up the original list in memory
-    updated_list = copy.deepcopy(dependency_list)
+    # 1. Deep copy to avoid modifying the original registry during execution
+    updated_registry = copy.deepcopy(registry)
     
-    # 1. Auto-detect old root if not provided
+    # 2. Auto-detect old root if not provided
     if old_project_root is None:
-        # Get all paths
-        all_paths = [item['full_path'] for item in dependency_list]
-        # Find the longest common folder
-        common_prefix = os.path.commonpath(all_paths)
+        # Grab the first actual path string found in the nested structure
+        # (Goes into the first category, then the first file_id)
+        first_cat = next(iter(registry.values()))
+        sample_path = next(iter(first_cat.values()))
         
-        # Assumption:structure is likely project_root/components/...
-        # So we want the parent of the common prefix
-        if "components" in common_prefix:
-            # Go up one level 
-            old_project_root = os.path.dirname(common_prefix)
+        # We assume the root is everything before '/components/'
+        if "components" in sample_path:
+            old_project_root = sample_path.split("components")[0].rstrip(os.sep)
         else:
-            old_project_root = common_prefix
+            # Fallback: just use the directory of the sample path
+            old_project_root = os.path.dirname(os.path.dirname(sample_path))
 
-    print(f"Rebasing paths...\nFROM: {old_project_root}\nTO:   {new_project_root}\n")
+    print(f"Rebasing Registry Paths...\nFROM: {old_project_root}\nTO:   {new_project_root}")
 
-    # 2. Update every path
-    for item in updated_list:
-        old_path = item['full_path']
-        
-        # Calculate the relative path 
-        # This strips the old_root part off the front
-        relative_path = os.path.relpath(old_path, start=old_project_root)
-        
-        # Join it to the new root
-        new_path = os.path.join(new_project_root, relative_path)
-        
-        # Update the dictionary
-        item['full_path'] = new_path
-
-    return updated_list
-
-
-####################################################################################################################################################
-####################################################################################################################################################
-########################################################  REFORMAT DEPENDENCIES LIST  #########################################################
-
-
-def create_dep_map(dependency_list):
-    """
-    Transforms the list of dicts into a nested dictionary for fast lookup.
-    Structure: { 'SECTION_NAME': { 'Title Name': 'full/path/to/file.tex' } }
-    """
-    file_map = {}
-    
-    for entry in dependency_list:
-        section = entry['section']
-        title = entry['title']
-        full_path = entry['full_path']
-        
-        # If section doesn't exist, create it
-        if section not in file_map:
-            file_map[section] = {}
+    # 3. Traverse and Update
+    for category, files in updated_registry.items():
+        for file_id, old_path in files.items():
+            # Using LibPath (pathlib) for clean manipulation
+            # .relative_to() is the professional way to strip the old root
+            rel_path = os.path.relpath(old_path, start=old_project_root)
             
-        # Add the title and path
-        file_map[section][title] = full_path
-        
-    return file_map
+            # Combine new root with the relative path
+            new_path = Path(new_project_root) / rel_path
+            
+            # Update the registry with the string version of the new path
+            updated_registry[category][file_id] = str(new_path)
+
+    return updated_registry
 
 
 
@@ -196,38 +141,40 @@ def create_dep_map(dependency_list):
 ########################################################  BUILD RESUME USING DEPENDENCIES  #########################################################
 
 
-def build_resume_context(dependency_list):
+def build_resume_context(registry):
     """
-    Takes the dependency list and creates a single tagged string
-    containing the entire resume content.
+    Traverses the nested registry dictionary to create a single tagged string
+    containing the entire resume content for LLM context.
+    
+    Args:
+        registry (dict): The nested dictionary {category: {file_id: path}}
     """
     full_context_text = ""
 
-    for item in dependency_list:
-        path = item['full_path']
-        section = item['section']
-        title = item.get('title', 'Untitled') 
-        
-        # Read the file content
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                content = f.read().strip()
-        except FileNotFoundError:
-            content = f"[ERROR: File not found at {path}]"
+    # Iterate through categories (folders)
+    for category, files in registry.items():
+        # Iterate through specific files in that category
+        for file_id, path in files.items():
+            
+            # 1. Read the file content
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+            except Exception as e:
+                content = f"[ERROR: Could not read file at {path}. Details: {e}]"
 
-        # 2. Create Semantic Tags
-        # We include the section and title as attributes so the LLM understands the context
-        # e.g., <component section="TECHNICAL EXPERIENCE" title="AI Researcher">
-        entry = (
-            f"<component section='{section}' title='{title}'>\n"
-            f"{content}\n"
-            f"</component>\n\n"
-        )
-        
-        full_context_text += entry
+            # 2. Create Semantic Tags
+            # We use 'category' and 'id' as attributes. 
+            # This matches your LLM_TO_RESUME_BRIDGE structure perfectly.
+            entry = (
+                f"<component category='{category}' id='{file_id}'>\n"
+                f"{content}\n"
+                f"</component>\n\n"
+            )
+            
+            full_context_text += entry
 
     return full_context_text
-
 
 ####################################################################################################################################################
 ####################################################################################################################################################
@@ -275,7 +222,7 @@ def flatten_pydantic(extraction_obj, target_keys):
 
 
 def convert_to_latex(content):
-    """
+    r"""
     Converts raw text, lists, or dictionaries into valid LaTeX syntax.
     Escapes LaTeX reserved characters and applies specific formatting based on type.
 
@@ -379,14 +326,14 @@ def write_section_content(file_map, section, title, content_data):
         with open(target_path, 'r', encoding='utf-8') as f:
             original_content = f.read()
 
-        #  Perform targeted replacement for itemized lists
-        # We look for \begin{itemize} to determine if this is a list update
+        
+        # Look for \begin{itemize} to determine if this is a list update
         if "\\begin{itemize}" in content_data:
             pattern = r"\\begin\{itemize\}.*?\\end\{itemize\}"
             
             # If the original file contains a list, replace only that segment
             if re.search(pattern, original_content, flags=re.DOTALL):
-                # We extract the clean list from the new data
+
                 new_list = re.search(pattern, content_data, flags=re.DOTALL).group(0)
                 
                 # Replace the old list with the new one. 
@@ -420,48 +367,84 @@ def write_section_content(file_map, section, title, content_data):
 ####################################################################################################################################################
 ##########################################################   Reorder Experience Section   ##########################################################
 
-def exp_reorder(file_path, ranked_keys, bridge_dict):
-    """
-    Replaces the LaTeX content between two %exp comment anchors 
-    with a new order of subimports.
-    """
-    # Create the new string and escape backslashes for the Regex engine
-    new_experience_block = "\n".join([bridge_dict[key] for key in ranked_keys])
-    safe_experience_block = new_experience_block.replace("\\", "\\\\")
-    
-    #Read the main file
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
 
-    #Define the Pattern to look for %exp anchors
-    # % is a special char in some contexts, but here it matches literally.
-    # We look for %exp ... some content ... %exp
-    pattern = r"(%exp)(.*?)(%exp)"
+def exp_reorder(file_path, bridge_dict, primary_list, secondary_list=None, pro_exp_sep=True):
+    r"""
+    Replaces the content between %tech exp anchors in main.tex.
     
-    #Check if the anchors exist before proceeding
-    if not re.search(pattern, content, flags=re.DOTALL):
-        print("Error: The comment anchors '%exp' were not found in the file.")
-        print("Instruction: Please wrap your experience subimports in your main.tex like this:")
-        print("\n%exp\n\\subimport{...}{...}\n%exp\n")
+    Args:
+        file_path (str): Path to main.tex
+        bridge_dict (dict): Map of {llm_key: r"\subimport{...}{...}"}
+        primary_list (list): 
+            - If pro_exp_sep=True: The list of PROJECT keys.
+            - If pro_exp_sep=False: The SINGLE MIXED list of all keys.
+        secondary_list (list, optional): 
+            - If pro_exp_sep=True: The list of EXPERIENCE keys.
+            - If pro_exp_sep=False: Ignored (can be None).
+        pro_exp_sep (bool): Toggle between split sections vs. single section.
+    """
+    
+    # Build the Primary Block (Always used)
+    # This represents 'Projects' in split mode OR 'Everything' in mixed mode
+    primary_block = "\n".join([bridge_dict.get(k, f"% Missing Bridge: {k}") for k in primary_list])
+
+    # Logic: Construct the Final LaTeX Block
+    if pro_exp_sep:
+        # --- Mode A: Two Separate Sections (Projects + Experience) ---
+        if not secondary_list:
+            print("Warning: Split mode is True but no secondary_list (Experience) was provided.")
+            secondary_block = ""
+        else:
+            secondary_block = "\n".join([bridge_dict.get(k, f"% Missing Bridge: {k}") for k in secondary_list])
+
+        new_content_block = (
+            f"\\resumesection{{Projects}}\n"
+            f"{primary_block}\n\n"
+            f"\\resumesection{{Experience}}\n"
+            f"{secondary_block}"
+        )
+    else:
+        # --- Mode B: Single Combined Section (Mixed Order) ---
+        # We only use the primary_list, which now contains the mixed/ranked items
+        new_content_block = (
+            f"\\resumesection{{Technical Experience}}\n"
+            f"{primary_block}"
+        )
+
+    # Escape backslashes for Regex safety
+    safe_content_block = new_content_block.replace("\\", "\\\\")
+
+    # Read the File
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except FileNotFoundError:
+        print(f"Error: File not found at {file_path}")
         return False
 
-    #Perform the substitution
-    # \1 is the first %exp, \3 is the second %exp
+
+    # Pattern: Matches everything between %tech exp and %tech exp ends
+    pattern = r"(%tech exp)(.*?)(%tech exp ends)"
+    
+    if not re.search(pattern, content, flags=re.DOTALL):
+        print(f"Error: Anchors '%tech exp' and '%tech exp ends' not found in {file_path}")
+        return False
+
     new_content = re.sub(
         pattern, 
-        rf"\1\n{safe_experience_block}\n\3", 
+        rf"\1\n{safe_content_block}\n\3", 
         content, 
         flags=re.DOTALL
     )
 
-    #Write back to the file
+    # Write Back
     try:
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
-        print(f"Successfully reordered {len(ranked_keys)} experiences in {file_path}")
+        print(f"Successfully reordered resume. (Split Mode: {pro_exp_sep})")
         return True
     except Exception as e:
-        print(f"Failed to write to file: {e}")
+        print(f"Failed to write file: {e}")
         return False
 
 ####################################################################################################################################################
@@ -474,21 +457,21 @@ def compile_latex(main_file_path, output_dir=None):
     Refined LuaLaTeX compiler that handles complex paths by 
     isolating the working directory.
     """
-    # 1. Expand to absolute path to avoid any ambiguity
+    #  Expand to absolute path to avoid any ambiguity
     abs_main_path = os.path.abspath(main_file_path)
     
     if not os.path.isfile(abs_main_path):
         print(f"Error: File not found at {abs_main_path}")
         return False
 
-    # 2. Split path into directory and filename
+    # Split path into directory and filename
     # This allows us to 'cd' into the folder and run the file by name
     file_dir = os.path.dirname(abs_main_path)
     file_name = os.path.basename(abs_main_path)
     
     target_output = os.path.abspath(output_dir) if output_dir else file_dir
 
-    # 3. Construct the command
+    # Construct the command
     # We use the file_name only because we will set the cwd to file_dir
     command = [
         "lualatex",
@@ -510,10 +493,11 @@ def compile_latex(main_file_path, output_dir=None):
             )
 
             if result.returncode != 0:
-                print(f"Error: Compilation failed during pass {pass_count}")
+                print(f"Error: Compilation might have failed during pass!!!{pass_count}")
                 # Log the bottom of the stdout to see the specific LaTeX error
-                log_lines = result.stdout.splitlines()
-                print("\n".join(log_lines[-20:]))
+                ## For Debugging purpose only
+                # log_lines = result.stdout.splitlines()
+                # print("\n".join(log_lines[-20:]))
                 return False
 
         print(f"Successfully compiled: {file_name}")
@@ -586,6 +570,6 @@ def convert_str_to_pdf(content_str: str, output_dir: str, output_filename: str =
         print(f"Success! PDF saved at: {full_path}")
         return True
     except Exception as e:
-        print(f"Error generating PDF: {e}")
+        #print(f"Error generating PDF: {e}")
         return False
 

@@ -9,6 +9,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import StrOutputParser
+
 from pydantic import BaseModel, Field
 
 
@@ -260,6 +262,7 @@ def extract_jd_features(jd_text: str, gemini_api_key: str = None) -> JDExtractio
     except Exception as e:
         print(f"Judge Error: {e}")
         return JDExtraction(technical_stack=[], tools_and_platforms=[], domain_knowledge=[], soft_skills=[], years_experience_min=0)
+
 
 ####################################################################################################################################################
 ####################################################################################################################################################
@@ -645,10 +648,6 @@ def generate_skills(
 ############################################################   GENERATE COVER LETTER   #############################################################
 
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-
 def generate_cover_letter(
     jd: str, 
     keywords: list, 
@@ -674,23 +673,29 @@ def generate_cover_letter(
     )
 
     template = """
-    You are a talented engineer applying for a dream job. 
-    Write a cover letter that sounds like a real person—enthusiastic, simple, and passionate.
-
-    CONTEXT:
-    - Job Description: {jd}
-    - Key Skills to Highlight: {keywords}
-    - My Resume Background: {resume}
-
-    WRITING GUIDELINES:
-    1. TONE: Simple, conversational, and high-energy. Avoid "corporate speak" or sounding like a robot.
-    2. THE HOOK: Start with a clear reason why I am excited about this specific role. 
-    3. THE VALUE: Pick one or two specific achievements from my resume that prove I love solving the types of problems mentioned in the JD.
-    4. PASSION: Make it clear that I'm not just looking for "a job," but that I genuinely love what I do (e.g., coding, building AI, solving complex puzzles).
-    5. STRUCTURE: Keep it to 3-5, punchy paragraphs. 
-    6. SIGN-OFF: End with a friendly, confident call to action.
-
-    MANDATORY: Do not use words like 'vibrant', 'delighted', 'synergy', or 'fast-paced environment'. Use simple words that a real person uses.
+        You are a talented engineer applying for a dream job. 
+        Write a cover letter that sounds like a real person—enthusiastic, simple, and passionate.
+    
+        CONTEXT:
+        - Job Description: {jd}
+        - Key Skills to Highlight: {keywords}
+        - My Resume Background: {resume}
+        - My Name: Bardia Azami
+    
+        WRITING GUIDELINES:
+        1. TONE: Simple, conversational, and high-energy. Avoid "corporate speak" or sounding like a robot.
+        2. THE HOOK: Start with a clear reason why I am excited about this specific role. 
+        3. THE VALUE: Pick one or two specific achievements from my resume that prove I love solving the types of problems mentioned in the JD.
+        4. PASSION: Make it clear that I'm not just looking for "a job," but that I genuinely love what I do.
+        5. STRUCTURE: Keep it to 3-5, punchy paragraphs. 
+        6. SIGN-OFF: End with a friendly, confident call to action.
+    
+        FORMATTING & NAMES:
+        - GREETING: Start the letter with 'Dear company_name Team' ,' or 'Dear Hiring Team,'. 
+        - NO PLACEHOLDERS: Do not use brackets like [Hiring Manager] or [Date]. If a specific name is unknown, use the generic options provided above.
+        - SIGNATURE: Always sign off with 'Best,' followed by 'Bardia Azami'.
+    
+        MANDATORY: Do not use words like 'vibrant', 'delighted', 'synergy', or 'fast-paced environment'. Use simple words that a real person uses.
     """
 
     prompt = ChatPromptTemplate.from_template(template)
